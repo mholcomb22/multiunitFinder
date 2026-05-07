@@ -261,7 +261,7 @@ def generate_html(properties: List[Dict]) -> str:
                         </div>
                         
                         <div class="mt-8 pt-6 border-t text-center">
-                            <div class="text-3xl font-bold ${p.cash_flow_positive 'text-emerald-600'}">
+                            <div class="text-3xl font-bold ${p.cash_flow_positive}">
                                 $${p.est_monthly_cash_flow}/mo
                             </div>
                             <p class="text-sm text-gray-500">Estimated Monthly Cash Flow</p>
