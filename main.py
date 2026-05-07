@@ -261,7 +261,7 @@ def generate_html(properties: List[Dict]) -> str:
             const properties = {props_json};
             document.getElementById('properties').innerHTML = properties.map(p => `
                 <div class="bg-white rounded-3xl shadow-xl overflow-hidden">
-                    <img src="${p.image || 'https://picsum.photos/id/1015/800/400'}" class="w-full h-52 object-cover">
+                    <img src="${p.image}" class="w-full h-52 object-cover">
                     <div class="p-6">
                         <h3 class="text-3xl font-bold">$${(p.price).toLocaleString()}</h3>
                         <p class="text-gray-500">${p.address}</p>
