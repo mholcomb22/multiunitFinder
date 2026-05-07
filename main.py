@@ -251,12 +251,12 @@ def generate_html(properties: List[Dict]) -> str:
                 <div class="bg-white rounded-3xl shadow-xl overflow-hidden hover:shadow-2xl transition">
                     <img src="${'https://picsum.photos/id/1015/800/400'}" class="w-full h-52 object-cover">
                     <div class="p-6">
-                        <h3 class="text-3xl font-bold">$${Number(p.price).toLocaleString()}</h3>
+                        <h3 class="text-3xl font-bold">$${(p.price).toLocaleString()}</h3>
                         <p class="text-gray-500">${p.address}</p>
                         <span class="inline-block mt-3 px-5 py-2 bg-emerald-100 text-emerald-700 rounded-full font-medium">${p.units}-unit</span>
                         
                         <div class="mt-6 space-y-3 text-sm">
-                            <div class="flex justify-between"><span>20% Down</span><strong>$${Number(p.down_payment).toLocaleString()}</strong></div>
+                            <div class="flex justify-between"><span>20% Down</span><strong>$${(p.down_payment).toLocaleString()}</strong></div>
                             <div class="flex justify-between"><span>Monthly Mortgage</span><strong>$${p.monthly_mortgage}</strong></div>
                             <div class="flex justify-between"><span>Est. Rental Income</span><strong class="text-emerald-600">$${p.est_monthly_rental}</strong></div>
                         </div>
