@@ -118,6 +118,7 @@ def fetch_attom_fallback(max_price: int = 1000000) -> List[Dict]:
         )
         resp.raise_for_status()
         data = resp.json()
+        print(data);
         properties = []
         for item in data.get("property", []):
             prop = {
