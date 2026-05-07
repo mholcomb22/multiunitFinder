@@ -15,8 +15,8 @@ from email import encoders
 app = FastAPI(title="Boise Multi-Unit Cash Flow Analyzer")
 
 # ========================= CONFIG =========================
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY", "YOUR_RAPIDAPI_KEY_HERE")
-ATTOM_API_KEY = os.getenv("ATTOM_API_KEY", "YOUR_ATTOM_API_KEY_HERE")
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
+ATTOM_API_KEY = os.getenv("ATTOM_API_KEY")
 
 EMAIL_TO = "misarija@msn.com"
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
@@ -24,7 +24,7 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
-MORTGAGE_RATE = 6.35          # May 2026 rate
+MORTGAGE_RATE = 6.35          # May 2026
 DOWN_PAYMENT_PCT = 0.20
 
 scheduler = BackgroundScheduler()
@@ -32,7 +32,7 @@ scheduler = BackgroundScheduler()
 # =========================================================
 
 def calculate_mortgage(principal: float) -> float:
-    """Calculate 30-year fixed mortgage payment (P&I only)"""
+    """30-year fixed mortgage monthly payment (P&I)"""
     if principal <= 0:
         return 0.0
     monthly_rate = MORTGAGE_RATE / 12 / 100
@@ -59,7 +59,11 @@ def estimate_rental_income(units: int, price: int = 0) -> float:
 
 
 def fetch_realtor_properties(max_price: int = 1000000) -> List[Dict]:
-    """Primary: Realtor.com via RapidAPI"""
+    """Primary source: Realtor.com via RapidAPI"""
+    if not RAPIDAPI_KEY:
+        print("⚠️  RAPIDAPI_KEY not set")
+        return []
+
     url = "https://realtor-data1.p.rapidapi.com/property_list/"
     payload = {
         "query": {
@@ -81,6 +85,7 @@ def fetch_realtor_properties(max_price: int = 1000000) -> List[Dict]:
         resp = requests.post(url, json=payload, headers=headers, timeout=15)
         resp.raise_for_status()
         data = resp.json()
+
         properties = []
         for item in data.get("properties", []):
             prop = {
@@ -98,12 +103,15 @@ def fetch_realtor_properties(max_price: int = 1000000) -> List[Dict]:
                 properties.append(prop)
         return properties[:30]
     except Exception as e:
-        print("Realtor API Error:", e)
+        print(f"Realtor API Error: {e}")
         return []
 
 
 def fetch_attom_fallback(max_price: int = 1000000) -> List[Dict]:
     """Fallback: ATTOM"""
+    if not ATTOM_API_KEY:
+        return []
+
     headers = {"Accept": "application/json", "apikey": ATTOM_API_KEY}
     params = {
         "postalcode": "83702|83704|83705|83706|83709",
@@ -118,7 +126,7 @@ def fetch_attom_fallback(max_price: int = 1000000) -> List[Dict]:
         )
         resp.raise_for_status()
         data = resp.json()
-        print(data);
+
         properties = []
         for item in data.get("property", []):
             prop = {
@@ -126,23 +134,27 @@ def fetch_attom_fallback(max_price: int = 1000000) -> List[Dict]:
                 "address": item.get("address", {}).get("oneLine", "N/A"),
                 "price": item.get("avm", {}).get("amount", {}).get("avmvalue", 0),
                 "units": 2,
-                "beds": 0, "baths": 0, "sqft": 0,
+                "beds": 0,
+                "baths": 0,
+                "sqft": 0,
                 "image": None,
                 "source": "ATTOM"
             }
             if prop.get("price") and 0 < prop["price"] < max_price:
                 properties.append(prop)
         return properties[:20]
-    except:
+    except Exception as e:
+        print(f"ATTOM API Error: {e}")
         return []
 
 
 def fetch_properties(max_price: int = 1000000) -> List[Dict]:
-    props = fetch_realtor_properties(max_price)
-    if not props:
+    """Try Realtor first → fallback to ATTOM"""
+    properties = fetch_realtor_properties(max_price)
+    if not properties:
         print("Falling back to ATTOM...")
-        props = fetch_attom_fallback(max_price)
-    return props
+        properties = fetch_attom_fallback(max_price)
+    return properties
 
 
 def enrich_with_financials(properties: List[Dict]) -> List[Dict]:
@@ -170,7 +182,7 @@ def enrich_with_financials(properties: List[Dict]) -> List[Dict]:
     return enriched
 
 
-def generate_csv(properties: List[Dict], filename="boise_multi_units_cashflow.csv"):
+def generate_csv(properties: List[Dict], filename: str = "boise_multi_units_cashflow.csv") -> str | None:
     if not properties:
         return None
     fieldnames = ["address", "price", "units", "down_payment", "loan_amount",
@@ -194,7 +206,7 @@ def send_email_with_csv():
     msg = MIMEMultipart()
     msg["From"] = SMTP_USER
     msg["To"] = EMAIL_TO
-    msg["Subject"] = f"Boise Multi-Unit Cash Flow Report - {datetime.now().strftime('%Y-%m-%d')}"
+    msg["Subject"] = f"Boise Multi-Unit Cash Flow Report - {datetime.now():%Y-%m-%d}"
 
     with open(csv_file, "rb") as attachment:
         part = MIMEBase("application", "octet-stream")
@@ -209,9 +221,9 @@ def send_email_with_csv():
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.send_message(msg)
         server.quit()
-        print(f"✅ Email sent successfully at {datetime.now()}")
+        print(f"✅ Email sent to {EMAIL_TO} at {datetime.now()}")
     except Exception as e:
-        print("Email failed:", e)
+        print(f"Email failed: {e}")
     finally:
         if os.path.exists(csv_file):
             os.remove(csv_file)
@@ -233,11 +245,11 @@ def generate_html(properties: List[Dict]) -> str:
     <body class="bg-gray-50 p-6">
         <div class="max-w-7xl mx-auto">
             <h1 class="text-4xl font-bold text-center mb-2">🏠 Boise Multi-Unit Cash Flow</h1>
-            <p class="text-center text-gray-600 mb-8">30yr Fixed @ {MORTGAGE_RATE}% • 20% Down • Refined Rental Estimates</p>
+            <p class="text-center text-gray-600 mb-8">30yr Fixed @ {MORTGAGE_RATE}% • 20% Down</p>
             
             <div class="text-center mb-8">
                 <a href="/export-csv" 
-                   class="inline-flex items-center bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-2xl font-semibold text-lg shadow-md">
+                   class="inline-flex items-center bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-2xl font-semibold text-lg">
                     <i class="fa-solid fa-download mr-3"></i> Download CSV
                 </a>
             </div>
@@ -248,8 +260,8 @@ def generate_html(properties: List[Dict]) -> str:
         <script>
             const properties = {props_json};
             document.getElementById('properties').innerHTML = properties.map(p => `
-                <div class="bg-white rounded-3xl shadow-xl overflow-hidden hover:shadow-2xl transition">
-                    <img src="${'https://picsum.photos/id/1015/800/400'}" class="w-full h-52 object-cover">
+                <div class="bg-white rounded-3xl shadow-xl overflow-hidden">
+                    <img src="${p.image || 'https://picsum.photos/id/1015/800/400'}" class="w-full h-52 object-cover">
                     <div class="p-6">
                         <h3 class="text-3xl font-bold">$${(p.price).toLocaleString()}</h3>
                         <p class="text-gray-500">${p.address}</p>
@@ -258,14 +270,14 @@ def generate_html(properties: List[Dict]) -> str:
                         <div class="mt-6 space-y-3 text-sm">
                             <div class="flex justify-between"><span>20% Down</span><strong>$${(p.down_payment).toLocaleString()}</strong></div>
                             <div class="flex justify-between"><span>Monthly Mortgage</span><strong>$${p.monthly_mortgage}</strong></div>
-                            <div class="flex justify-between"><span>Est. Rental Income</span><strong class="text-emerald-600">$${p.est_monthly_rental}</strong></div>
+                            <div class="flex justify-between"><span>Est. Rental</span><strong class="text-emerald-600">$${p.est_monthly_rental}</strong></div>
                         </div>
                         
                         <div class="mt-8 pt-6 border-t text-center">
                             <div class="text-3xl font-bold ${p.cash_flow_positive}">
                                 $${p.est_monthly_cash_flow}/mo
                             </div>
-                            <p class="text-sm text-gray-500">Estimated Monthly Cash Flow</p>
+                            <p class="text-sm text-gray-500">Estimated Cash Flow</p>
                         </div>
                     </div>
                 </div>
@@ -293,16 +305,11 @@ async def export_csv():
     return FileResponse(csv_file, media_type="text/csv", filename="boise_multi_units_cashflow.csv")
 
 
-@app.get("/api/properties")
-async def get_properties(max_price: int = Query(1000000, le=2000000)):
-    properties = fetch_properties(max_price)
-    return enrich_with_financials(properties)
-
-
 # ========================= SCHEDULER =========================
 scheduler.add_job(send_email_with_csv, 'cron', hour=8, minute=0)
 scheduler.start()
-print(f"✅ App running — Daily email scheduled for 8:00 AM to {EMAIL_TO}")
+print(f"✅ App started — Daily email scheduled for 8:00 AM to {EMAIL_TO}")
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+
