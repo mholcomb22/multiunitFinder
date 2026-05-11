@@ -78,11 +78,11 @@ def fetch_realtor_properties(max_price: int = 1000000) -> List[Dict]:
     }
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "realtor-data1.p.rapidapi.com",
+        "x-rapidapi-host": "realtor-search.p.rapidapi.com",
         "Content-Type": "application/json"
     }
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=15)
+        resp = requests.get(url, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
 
