@@ -1,325 +1,148 @@
-from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse, FileResponse
-import requests
-import os
-import csv
-from datetime import datetime
-from typing import List, Dict
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import List, Optional
 import uvicorn
-from apscheduler.schedulers.background import BackgroundScheduler
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
 
-app = FastAPI(title="Boise Multi-Unit Cash Flow Analyzer")
+app = FastAPI(title="Boise Multi-Unit Finder")
 
-# ========================= CONFIG =========================
-RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
-ATTOM_API_KEY = os.getenv("ATTOM_API_KEY")
-print("ATTOM_API_KEY:"+""+ATTOM_API_KEY);
-EMAIL_TO = "misarija@msn.com"
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+# Mock data: Multi-unit properties in Boise, ID under $1M
+class Property(BaseModel):
+    id: int
+    address: str
+    price: int
+    units: int
+    beds: int
+    baths: float
+    sqft: int
+    description: str
+    image: str  # placeholder URL
 
-MORTGAGE_RATE = 6.35          # May 2026
-DOWN_PAYMENT_PCT = 0.20
+properties_db: List[Property] = [
+    {
+        "id": 1,
+        "address": "1234 Maple Ave, Boise, ID 83702",
+        "price": 675000,
+        "units": 2,
+        "beds": 4,
+        "baths": 3.0,
+        "sqft": 2800,
+        "description": "Charming duplex with separate yards and updated kitchens.",
+        "image": "https://picsum.photos/id/1015/600/400"
+    },
+    {
+        "id": 2,
+        "address": "567 Pine St, Boise, ID 83704",
+        "price": 899000,
+        "units": 3,
+        "beds": 6,
+        "baths": 4.5,
+        "sqft": 4200,
+        "description": "Triplex near downtown with strong rental income potential.",
+        "image": "https://picsum.photos/id/133/600/400"
+    },
+    {
+        "id": 3,
+        "address": "890 Elm Dr, Boise, ID 83705",
+        "price": 450000,
+        "units": 2,
+        "beds": 3,
+        "baths": 2.0,
+        "sqft": 2100,
+        "description": "Affordable duplex in quiet neighborhood. Great for owner-occupy + rent.",
+        "image": "https://picsum.photos/id/201/600/400"
+    },
+    {
+        "id": 4,
+        "address": "2345 Birch Ln, Boise, ID 83706",
+        "price": 950000,
+        "units": 4,
+        "beds": 8,
+        "baths": 6.0,
+        "sqft": 5100,
+        "description": "4-plex investment property with excellent cash flow.",
+        "image": "https://picsum.photos/id/251/600/400"
+    },
+    {
+        "id": 5,
+        "address": "1122 Cedar Ave, Boise, ID 83709",
+        "price": 725000,
+        "units": 2,
+        "beds": 5,
+        "baths": 3.5,
+        "sqft": 3200,
+        "description": "Modern duplex built in 2022. Energy efficient and move-in ready.",
+        "image": "https://picsum.photos/id/301/600/400"
+    },
+]
 
-scheduler = BackgroundScheduler()
-
-# =========================================================
-
-def calculate_mortgage(principal: float) -> float:
-    """30-year fixed mortgage monthly payment (P&I)"""
-    if principal <= 0:
-        return 0.0
-    monthly_rate = MORTGAGE_RATE / 12 / 100
-    months = 360
-    payment = principal * (monthly_rate * (1 + monthly_rate)**months) / ((1 + monthly_rate)**months - 1)
-    return round(payment, 2)
-
-
-def estimate_rental_income(units: int, price: int = 0) -> float:
-    """Refined rental estimates for Boise multi-unit properties"""
-    if units == 2:
-        per_unit = 1650
-    elif units == 3:
-        per_unit = 1580
-    elif units == 4:
-        per_unit = 1520
-    else:
-        per_unit = 1550
-
-    if price > 0 and price < 600000:
-        per_unit += 80
-
-    return round(units * per_unit)
-
-
-def fetch_realtor_properties(max_price: int = 1000000) -> List[Dict]:
-    """Primary source: Realtor.com via RapidAPI"""
-    if not RAPIDAPI_KEY:
-        print("⚠️  RAPIDAPI_KEY not set")
-        return []
-
-    url = "https://realtor-data1.p.rapidapi.com/property_list/"
-    payload = {
-        "query": {
-            "city": "Boise",
-            "state_code": "ID",
-            "status": ["for_sale"],
-            "price_max": max_price,
-            "property_type": ["multi_family"]
-        },
-        "limit": 42,
-        "sort": {"direction": "desc", "field": "list_date"}
-    }
-    headers = {
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "realtor-search.p.rapidapi.com",
-        "Content-Type": "application/json"
-    }
-    try:
-        resp = requests.get(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-
-        properties = []
-        for item in data.get("properties", []):
-            prop = {
-                "id": item.get("property_id"),
-                "address": item.get("location", {}).get("address", {}).get("line", "N/A"),
-                "price": item.get("list_price") or item.get("price"),
-                "units": item.get("description", {}).get("units") or 2,
-                "beds": item.get("description", {}).get("beds"),
-                "baths": item.get("description", {}).get("baths"),
-                "sqft": item.get("description", {}).get("sqft"),
-                "image": (item.get("photos") or [{}])[0].get("href") if item.get("photos") else None,
-                "source": "Realtor.com"
-            }
-            if prop.get("price") and 0 < prop["price"] < max_price:
-                properties.append(prop)
-        return properties[:30]
-    except Exception as e:
-        print(f"Realtor API Error: {e}")
-        return []
-
-
-def fetch_attom_fallback(max_price: int = 1000000) -> List[Dict]:
-    """Fallback: ATTOM"""
-    if not ATTOM_API_KEY:
-        return []
-
-    headers = {"Accept": "application/json", "apikey": ATTOM_API_KEY}
-    params = {
-        "postalcode": "83702|83704|83705|83706|83709",
-        "propertyindicator": "21",
-        "maxavmvalue": max_price,
-        "pagesize": 50
-    }
-    try:
-        resp = requests.get(
-            "https://api.gateway.attomdata.com/propertyapi/v1.0.0/property/snapshot",
-            headers=headers, params=params, timeout=15
-        )
-        resp.raise_for_status()
-
-        # Handling the response
-        if response.status_code == 200:
-            data = response.json()
-            print("Success! Data retrieved.")
-            # Process your data here
-         else:
-        print(f"Error: {response.status_code}")
-             
-    print(response.text)
-        data = resp.json()
-
-        properties = []
-        for item in data.get("property", []):
-            prop = {
-                "id": item.get("identifier", {}).get("attomId"),
-                "address": item.get("address", {}).get("oneLine", "N/A"),
-                "price": item.get("avm", {}).get("amount", {}).get("avmvalue", 0),
-                "units": 2,
-                "beds": 0,
-                "baths": 0,
-                "sqft": 0,
-                "image": None,
-                "source": "ATTOM"
-            }
-            if prop.get("price") and 0 < prop["price"] < max_price:
-                properties.append(prop)
-        return properties[:20]
-    except Exception as e:
-        print(f"ATTOM API Error: {e}")
-        return []
-
-
-def fetch_properties(max_price: int = 1000000) -> List[Dict]:
-    """Try Realtor first → fallback to ATTOM"""
-    properties = fetch_realtor_properties(max_price)
-    if not properties:
-        print("Falling back to ATTOM...")
-        properties = fetch_attom_fallback(max_price)
-    return properties
-
-
-def enrich_with_financials(properties: List[Dict]) -> List[Dict]:
-    enriched = []
-    for p in properties:
-        price = float(p.get("price", 0))
-        units = max(int(p.get("units", 2)), 2)
-
-        down_payment = price * DOWN_PAYMENT_PCT
-        loan_amount = price - down_payment
-        monthly_mortgage = calculate_mortgage(loan_amount)
-        est_rental = estimate_rental_income(units, int(price))
-        cash_flow = est_rental - monthly_mortgage
-
-        p.update({
-            "down_payment": round(down_payment),
-            "loan_amount": round(loan_amount),
-            "monthly_mortgage": monthly_mortgage,
-            "est_monthly_rental": est_rental,
-            "est_monthly_cash_flow": round(cash_flow, 0),
-            "cash_flow_positive": cash_flow > 0,
-            "per_unit_rent": round(est_rental / units, 0)
-        })
-        enriched.append(p)
-    return enriched
-
-
-def generate_csv(properties: List[Dict], filename: str = "boise_multi_units_cashflow.csv") -> str | None:
-    if not properties:
-        return None
-    fieldnames = ["address", "price", "units", "down_payment", "loan_amount",
-                  "monthly_mortgage", "est_monthly_rental", "est_monthly_cash_flow", "source"]
-    with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for p in properties:
-            row = {k: p.get(k) for k in fieldnames}
-            writer.writerow(row)
-    return filename
-
-
-def send_email_with_csv():
-    properties = fetch_properties()
-    enriched = enrich_with_financials(properties)
-    csv_file = generate_csv(enriched)
-    if not csv_file:
-        return
-
-    msg = MIMEMultipart()
-    msg["From"] = SMTP_USER
-    msg["To"] = EMAIL_TO
-    msg["Subject"] = f"Boise Multi-Unit Cash Flow Report - {datetime.now():%Y-%m-%d}"
-
-    with open(csv_file, "rb") as attachment:
-        part = MIMEBase("application", "octet-stream")
-        part.set_payload(attachment.read())
-        encoders.encode_base64(part)
-        part.add_header("Content-Disposition", f"attachment; filename={csv_file}")
-        msg.attach(part)
-
-    try:
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.send_message(msg)
-        server.quit()
-        print(f"✅ Email sent to {EMAIL_TO} at {datetime.now()}")
-    except Exception as e:
-        print(f"Email failed: {e}")
-    finally:
-        if os.path.exists(csv_file):
-            os.remove(csv_file)
-
-
-def generate_html(properties: List[Dict]) -> str:
-    enriched = enrich_with_financials(properties)
-    props_json = str(enriched).replace("'", '"')
-    return f"""
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    html_content = """
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Boise Multi-Unit Cash Flow Analyzer</title>
+        <title>Boise Multi-Unit Finder</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     </head>
-    <body class="bg-gray-50 p-6">
-        <div class="max-w-7xl mx-auto">
-            <h1 class="text-4xl font-bold text-center mb-2">🏠 Boise Multi-Unit Cash Flow</h1>
-            <p class="text-center text-gray-600 mb-8">30yr Fixed @ {MORTGAGE_RATE}% • 20% Down</p>
+    <body class="bg-gray-50">
+        <div class="max-w-7xl mx-auto p-6">
+            <h1 class="text-4xl font-bold text-center mb-2">🏠 Boise Multi-Unit Properties</h1>
+            <p class="text-center text-gray-600 mb-8">Under $1,000,000 • Live in one unit • Rent the rest</p>
             
-            <div class="text-center mb-8">
-                <a href="/export-csv" 
-                   class="inline-flex items-center bg-green-600 hover:bg-green-700 text-white px-8 py-4 rounded-2xl font-semibold text-lg">
-                    <i class="fa-solid fa-download mr-3"></i> Download CSV
-                </a>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="properties">
+                <!-- Populated by JavaScript -->
             </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8" id="properties"></div>
         </div>
 
         <script>
-            const properties = {props_json};
-            document.getElementById('properties').innerHTML = properties.map(p => `
-                <div class="bg-white rounded-3xl shadow-xl overflow-hidden">
-                    <img src="${'https://picsum.photos/id/1015/800/400'}" class="w-full h-52 object-cover">
-                    <div class="p-6">
-                        <h3 class="text-3xl font-bold">$${(p.price).toLocaleString()}</h3>
-                        <p class="text-gray-500">${p.address}</p>
-                        <span class="inline-block mt-3 px-5 py-2 bg-emerald-100 text-emerald-700 rounded-full font-medium">${p.units}-unit</span>
-                        
-                        <div class="mt-6 space-y-3 text-sm">
-                            <div class="flex justify-between"><span>20% Down</span><strong>$${(p.down_payment).toLocaleString()}</strong></div>
-                            <div class="flex justify-between"><span>Monthly Mortgage</span><strong>$${p.monthly_mortgage}</strong></div>
-                            <div class="flex justify-between"><span>Est. Rental</span><strong class="text-emerald-600">$${p.est_monthly_rental}</strong></div>
-                        </div>
-                        
-                        <div class="mt-8 pt-6 border-t text-center">
-                            <div class="text-3xl font-bold ${p.cash_flow_positive}">
-                                $${p.est_monthly_cash_flow}/mo
+            const properties = """ + str(properties_db).replace("'", '"') + """;
+
+            function renderProperties(props) {
+                const container = document.getElementById('properties');
+                container.innerHTML = props.map(p => `
+                    <div class="bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-xl transition">
+                        <img src="${p.image}" class="w-full h-48 object-cover">
+                        <div class="p-6">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <h3 class="text-2xl font-semibold">$${p.price.toLocaleString()}</h3>
+                                    <p class="text-gray-500 text-sm">${p.address}</p>
+                                </div>
+                                <span class="px-4 py-2 bg-emerald-100 text-emerald-700 text-xs font-medium rounded-full">${p.units}-unit</span>
                             </div>
-                            <p class="text-sm text-gray-500">Estimated Cash Flow</p>
+                            <div class="mt-4 grid grid-cols-3 gap-4 text-sm">
+                                <div><i class="fa-solid fa-bed mr-1"></i> ${p.beds} beds</div>
+                                <div><i class="fa-solid fa-bath mr-1"></i> ${p.baths} baths</div>
+                                <div><i class="fa-solid fa-ruler-combined mr-1"></i> ${p.sqft} sqft</div>
+                            </div>
+                            <p class="mt-4 text-gray-600 text-sm">${p.description}</p>
+                            <button onclick="alert('Contact info would go here for property #' + ${p.id})" 
+                                    class="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-medium">
+                                View Details / Contact
+                            </button>
                         </div>
                     </div>
-                </div>
-            `).join('');
+                `).join('');
+            }
+            renderProperties(properties);
         </script>
     </body>
     </html>
     """
+    return HTMLResponse(content=html_content)
 
-
-# ========================= ROUTES =========================
-@app.get("/", response_class=HTMLResponse)
-async def home():
-    properties = fetch_properties()
-    return HTMLResponse(content=generate_html(properties))
-
-
-@app.get("/export-csv")
-async def export_csv():
-    properties = fetch_properties()
-    enriched = enrich_with_financials(properties)
-    csv_file = generate_csv(enriched)
-    if not csv_file:
-        return {"error": "No properties found"}
-    return FileResponse(csv_file, media_type="text/csv", filename="boise_multi_units_cashflow.csv")
-
-
-# ========================= SCHEDULER =========================
-scheduler.add_job(send_email_with_csv, 'cron', hour=8, minute=0)
-scheduler.start()
-print(f"✅ App started — Daily email scheduled for 8:00 AM to {EMAIL_TO}")
+# REST API endpoint (for future integration)
+@app.get("/api/properties")
+async def get_properties():
+    return properties_db
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+
 
