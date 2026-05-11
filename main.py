@@ -17,7 +17,7 @@ app = FastAPI(title="Boise Multi-Unit Cash Flow Analyzer")
 # ========================= CONFIG =========================
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
 ATTOM_API_KEY = os.getenv("ATTOM_API_KEY")
-
+print("ATTOM_API_KEY:"+""+ATTOM_API_KEY);
 EMAIL_TO = "misarija@msn.com"
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
@@ -125,6 +125,16 @@ def fetch_attom_fallback(max_price: int = 1000000) -> List[Dict]:
             headers=headers, params=params, timeout=15
         )
         resp.raise_for_status()
+
+        # Handling the response
+        if response.status_code == 200:
+            data = response.json()
+            print("Success! Data retrieved.")
+            # Process your data here
+         else:
+        print(f"Error: {response.status_code}")
+             
+    print(response.text)
         data = resp.json()
 
         properties = []
